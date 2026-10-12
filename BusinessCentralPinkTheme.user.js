@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Business Central Pink Theme
 // @namespace    local.businesscentral.pinktheme
-// @version      1.0.2
+// @version      1.0.5
 // @description  Toggle a readable pink appearance in Business Central; remembers your preference across tabs.
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/BusinessCentralPinkTheme.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/BusinessCentralPinkTheme.user.js
@@ -24,10 +24,10 @@
     const hostId = 'tm-bc-pink-theme-toggle';
     const darkModeHostId = 'tm-bc-dark-mode-toggle';
     const colourPickerHostId = 'tm-bc-pink-colour-picker';
-    const filterAttribute = 'data-tm-bc-teal-filter';
+    const filterAttribute = 'data-tm-bc-colour-filter';
     const filterRotationProperty = '--tm-bc-pink-filter-rotation';
     const sourceTealHue = 182;
-    const defaultFilterColour = '#ff00ff';
+    const defaultFilterHue = 300;
     const isTopFrame = window.top === window;
     if (document.getElementById(hostId)) return;
 
@@ -45,18 +45,25 @@
         return 60 * ((red - green) / delta + 4);
     }
 
-    function applyFilterColour(colour, persist = false) {
-        if (typeof colour !== 'string' || !/^#[\da-f]{6}$/i.test(colour)) return;
-        const rotation = (hueFromHex(colour) - sourceTealHue + 360) % 360;
-        document.documentElement.style.setProperty(filterRotationProperty, `${rotation}deg`);
-        if (persist) GM_setValue(filterColourKey, colour);
+    function parseFilterHue(value) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return (Math.round(value) % 360 + 360) % 360;
+        }
+        if (typeof value === 'string' && /^#[\da-f]{6}$/i.test(value)) {
+            return Math.round(hueFromHex(value));
+        }
+        return null;
     }
 
-    let filterColour = GM_getValue(filterColourKey, defaultFilterColour);
-    if (typeof filterColour !== 'string' || !/^#[\da-f]{6}$/i.test(filterColour)) {
-        filterColour = defaultFilterColour;
+    function applyFilterHue(hue, persist = false) {
+        const rotation = (hue - sourceTealHue + 360) % 360;
+        document.documentElement.style.setProperty(filterRotationProperty, `${rotation}deg`);
+        if (persist) GM_setValue(filterColourKey, hue);
     }
-    applyFilterColour(filterColour);
+
+    let filterHue = parseFilterHue(GM_getValue(filterColourKey, defaultFilterHue));
+    if (filterHue === null) filterHue = defaultFilterHue;
+    applyFilterHue(filterHue);
 
     GM_addStyle(`
         html.${themeClass} [${filterAttribute}] {
@@ -142,7 +149,7 @@
         button.textContent = 'Pink mode';
         button.setAttribute('aria-label', 'Toggle pink theme');
         shadow.append(style, hoverStrip, button);
-        document.body.append(host);
+        document.documentElement.append(host);
     }
 
     function updateTogglePosition() {
@@ -195,51 +202,63 @@
                 color: #2b1720;
                 font: 13px 'Segoe UI', sans-serif;
             }
-            label { white-space: nowrap; }
-            input[type="color"] {
-                width: 34px;
-                height: 30px;
-                padding: 2px;
-                border: 1px solid #9d174d;
-                border-radius: 3px;
-                background: #ffffff;
+            label { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+            input[type="range"] {
+                width: 160px;
+                margin: 0;
                 cursor: pointer;
+                accent-color: #9d174d;
             }
-            output { min-width: 58px; font-family: Consolas, monospace; }
+            input[type="range"]::-webkit-slider-runnable-track {
+                height: 8px;
+                border-radius: 4px;
+                background: linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
+            }
+            input[type="range"]::-moz-range-track {
+                height: 8px;
+                border-radius: 4px;
+                background: linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
+            }
+            output { min-width: 36px; font-family: Consolas, monospace; }
             button {
                 min-height: 30px;
                 padding: 0 8px;
-                border: 1px solid #9d174d;
+                border: 1px solid hsl(var(--preview-hue, 300) 100% 22%);
                 border-radius: 3px;
-                background: #9d174d;
+                background: hsl(var(--preview-hue, 300) 100% 22%);
                 color: #ffffff;
                 font: 600 12px 'Segoe UI', sans-serif;
                 cursor: pointer;
             }
             button.secondary {
-                background: #ffffff;
-                color: #9d174d;
+                background: hsl(var(--preview-hue, 300) 100% 95%);
+                color: hsl(var(--preview-hue, 300) 100% 22%);
             }
             button:focus-visible,
             input:focus-visible { outline: 2px solid #701a3d; outline-offset: 2px; }
         `;
         const panel = document.createElement('div');
         panel.className = 'panel';
+        panel.style.setProperty('--preview-hue', filterHue);
         const label = document.createElement('label');
-        label.textContent = 'Filter colour';
+        label.append(document.createTextNode('Hue'));
         const picker = document.createElement('input');
-        picker.type = 'color';
-        picker.value = filterColour;
-        picker.setAttribute('aria-label', 'Choose the replacement hue');
-        let previewColour = filterColour;
+        picker.type = 'range';
+        picker.min = '0';
+        picker.max = '359';
+        picker.step = '1';
+        picker.value = String(filterHue);
+        picker.setAttribute('aria-label', 'Choose the replacement hue in degrees');
+        let previewHue = filterHue;
         const value = document.createElement('output');
-        value.value = previewColour;
-        value.textContent = previewColour;
-        const updatePreview = (colour) => {
-            previewColour = colour;
-            value.value = colour;
-            value.textContent = colour;
-            applyFilterColour(colour);
+        value.value = `${previewHue}\u00b0`;
+        value.textContent = `${previewHue}\u00b0`;
+        const updatePreview = (hue) => {
+            previewHue = Number(hue);
+            panel.style.setProperty('--preview-hue', previewHue);
+            value.value = `${previewHue}\u00b0`;
+            value.textContent = `${previewHue}\u00b0`;
+            applyFilterHue(previewHue);
         };
         picker.addEventListener('input', () => {
             updatePreview(picker.value);
@@ -249,33 +268,34 @@
         defaultButton.className = 'secondary';
         defaultButton.textContent = 'Default';
         defaultButton.addEventListener('click', () => {
-            picker.value = defaultFilterColour;
-            updatePreview(defaultFilterColour);
+            picker.value = String(defaultFilterHue);
+            updatePreview(defaultFilterHue);
         });
         const cancelButton = document.createElement('button');
         cancelButton.type = 'button';
         cancelButton.className = 'secondary';
         cancelButton.textContent = 'Cancel';
         cancelButton.addEventListener('click', () => {
-            applyFilterColour(filterColour);
+            applyFilterHue(filterHue);
             pickerHost.remove();
         });
         const applyButton = document.createElement('button');
         applyButton.type = 'button';
         applyButton.textContent = 'Apply';
         applyButton.addEventListener('click', () => {
-            applyFilterColour(previewColour, true);
+            filterHue = previewHue;
+            applyFilterHue(filterHue, true);
             pickerHost.remove();
         });
         label.append(picker);
         panel.append(label, value, defaultButton, cancelButton, applyButton);
         shadow.append(style, panel);
-        document.body.append(pickerHost);
+        document.documentElement.append(pickerHost);
         updateTogglePosition();
         picker.focus();
     }
 
-    function isTealColor(value) {
+    function isColouredValue(value) {
         const colors = value.match(/rgba?\([^)]+\)/g) || [value];
         return colors.some((color) => {
             const channels = color.match(/^rgba?\(([^)]+)\)$/);
@@ -286,22 +306,14 @@
             const max = Math.max(red, green, blue);
             const min = Math.min(red, green, blue);
             const delta = max - min;
-            let hue = 0;
-            if (delta > 0) {
-                if (max === red) hue = 60 * (((green - blue) / delta) % 6);
-                else if (max === green) hue = 60 * ((blue - red) / delta + 2);
-                else hue = 60 * ((red - green) / delta + 4);
-                if (hue < 0) hue += 360;
-            }
-
             const saturation = max === 0 ? 0 : delta / max;
-            return saturation >= 0.12 && hue >= 160 && hue <= 195;
+            return saturation >= 0.12;
         });
     }
 
-    function updateTealFilters() {
-        for (const element of document.body.querySelectorAll('*')) {
-            if (!(element instanceof Element) || element === host) continue;
+    function updateColouredFilters() {
+        for (const element of [document.body, ...document.body.querySelectorAll('*')]) {
+            if (!(element instanceof Element) || element === host || element.id === colourPickerHostId) continue;
 
             const parent = element.parentElement;
             if (parent?.closest(`[${filterAttribute}]`)) {
@@ -325,14 +337,14 @@
                 style.backgroundImage,
                 style.boxShadow,
             ];
-            const isTeal = colors.some(isTealColor);
-            if (isTeal) element.setAttribute(filterAttribute, '');
+            const isColoured = colors.some(isColouredValue);
+            if (isColoured) element.setAttribute(filterAttribute, '');
             else element.removeAttribute(filterAttribute);
         }
     }
 
     function render() {
-        if (enabled) updateTealFilters();
+        if (enabled) updateColouredFilters();
         else {
             for (const element of document.querySelectorAll(`[${filterAttribute}]`)) {
                 element.removeAttribute(filterAttribute);
@@ -369,9 +381,10 @@
     }
 
     GM_addValueChangeListener(filterColourKey, (_key, _oldValue, newValue) => {
-        if (typeof newValue !== 'string' || !/^#[\da-f]{6}$/i.test(newValue)) return;
-        filterColour = newValue;
-        applyFilterColour(filterColour);
+        const newHue = parseFilterHue(newValue);
+        if (newHue === null) return;
+        filterHue = newHue;
+        applyFilterHue(filterHue);
     });
     GM_addValueChangeListener(preferenceKey, (_key, _oldValue, newValue) => {
         enabled = newValue === true;
@@ -387,7 +400,7 @@
         surfaceUpdatePending = true;
         requestAnimationFrame(() => {
             surfaceUpdatePending = false;
-            if (enabled) updateTealFilters();
+            if (enabled) updateColouredFilters();
         });
     });
     observer.observe(document.body, {
