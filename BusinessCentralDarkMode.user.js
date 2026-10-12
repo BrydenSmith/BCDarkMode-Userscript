@@ -27,7 +27,7 @@
 
     GM_addStyle(`
         html.${themeClass} {
-            filter: invert(1) hue-rotate(180deg) contrast(0.75) !important;
+            filter: invert(1) hue-rotate(180deg) contrast(0.85) !important;
             background: white !important;
         }
         html.${themeClass} [${counterAttribute}],
