@@ -29,6 +29,23 @@
         html.${themeClass} [${filterAttribute}] {
             filter: hue-rotate(120deg) !important;
         }
+        #${hostId} {
+            position: fixed !important;
+            right: 0 !important;
+            bottom: 6px !important;
+            z-index: 2147483647 !important;
+            width: 144px !important;
+            height: 56px !important;
+            overflow: hidden !important;
+            pointer-events: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+        }
+        @media print {
+            #${hostId} { display: none !important; }
+        }
     `);
 
     let host = null;
@@ -39,19 +56,21 @@
         const shadow = host.attachShadow({ mode: 'open' });
         const style = document.createElement('style');
         style.textContent = `
-            :host {
-                all: initial;
-                position: fixed;
-                inset: 0;
-                z-index: 2147483647;
-                pointer-events: none;
+            :host { all: initial; }
+            .hover-strip {
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 20px;
+                height: 100%;
+                pointer-events: auto;
             }
             button {
-                position: fixed;
+                position: absolute;
+                top: 10px;
                 right: 16px;
-                bottom: 10px;
                 box-sizing: border-box;
-                min-width: 112px;
+                width: 112px;
                 height: 36px;
                 padding: 0 12px;
                 border: 1px solid #9d174d;
@@ -61,20 +80,35 @@
                 font: 600 13px 'Segoe UI', sans-serif;
                 cursor: pointer;
                 letter-spacing: 0;
+                transform: translateX(128px);
+                opacity: 0;
+                pointer-events: none;
+                transition: transform 180ms ease-out, opacity 180ms ease-out;
+            }
+            :host(:hover) button,
+            button:focus-visible {
+                transform: translateX(0);
+                opacity: 1;
                 pointer-events: auto;
             }
             button:hover { background: #701a3d; }
             button:focus-visible { outline: 3px solid #701a3d; outline-offset: 3px; }
+            @media (hover: none) {
+                button { transform: translateX(0); opacity: 1; pointer-events: auto; }
+            }
             @media (prefers-reduced-motion: reduce) {
                 button { transition: none; }
             }
         `;
+        const hoverStrip = document.createElement('div');
+        hoverStrip.className = 'hover-strip';
+        hoverStrip.setAttribute('aria-hidden', 'true');
         button = document.createElement('button');
         button.type = 'button';
         button.title = 'Toggle pink theme (Alt+Shift+P)';
         button.textContent = 'Pink mode';
         button.setAttribute('aria-label', 'Toggle pink theme');
-        shadow.append(style, button);
+        shadow.append(style, hoverStrip, button);
         document.body.append(host);
     }
 
