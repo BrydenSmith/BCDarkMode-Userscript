@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.0
+// @version      1.0.1
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
@@ -18,7 +18,7 @@
 (() => {
     'use strict';
 
-    const preferenceKey = 'universal-dark-mode-enabled';
+    const preferenceKey = `universal-dark-mode-enabled:${location.hostname}`;
     const themeClass = 'tm-universal-dark-mode';
     const hostId = 'tm-universal-dark-mode-toggle';
     const counterAttribute = 'data-tm-universal-dark-mode-counter-invert';
