@@ -1,7 +1,9 @@
 // ==UserScript==
 // @name         Business Central Dark Mode Toggle
 // @namespace    local.businesscentral.darkmode
-// @version      1.0.0
+// @version      1.0.1
+// @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/BusinessCentralDarkMode.user.js
+// @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/BusinessCentralDarkMode.user.js
 // @description  Toggle a reversible dark appearance in Business Central; remembers your preference across tabs.
 // @match        https://businesscentral.dynamics.com/*
 // @match        https://*.businesscentral.dynamics.com/*
