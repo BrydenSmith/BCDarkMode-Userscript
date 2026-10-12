@@ -3,6 +3,8 @@
 // @namespace    local.businesscentral.pinktheme
 // @version      1.0.0
 // @description  Toggle a readable pink appearance in Business Central; remembers your preference across tabs.
+// @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/BusinessCentralPinkTheme.user.js
+// @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/BusinessCentralPinkTheme.user.js
 // @match        https://businesscentral.dynamics.com/*
 // @match        https://*.businesscentral.dynamics.com/*
 // @run-at       document-idle
