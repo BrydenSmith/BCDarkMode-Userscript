@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Business Central Pink Theme
+// @name         Business Central Colour Changer
 // @namespace    local.businesscentral.pinktheme
-// @version      1.0.5
-// @description  Toggle a readable pink appearance in Business Central; remembers your preference across tabs.
+// @version      1.0.10
+// @description  Change the hue of coloured Business Central elements; remembers your settings across tabs.
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/BusinessCentralPinkTheme.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/BusinessCentralPinkTheme.user.js
 // @match        https://businesscentral.dynamics.com/*
@@ -25,6 +25,7 @@
     const darkModeHostId = 'tm-bc-dark-mode-toggle';
     const colourPickerHostId = 'tm-bc-pink-colour-picker';
     const filterAttribute = 'data-tm-bc-colour-filter';
+    const companyBadgeSelector = 'button[aria-label*="Environment:"][title*="Environment:"], [class*="badge-coin-root--"], [class*="badge--"]';
     const filterRotationProperty = '--tm-bc-pink-filter-rotation';
     const sourceTealHue = 182;
     const defaultFilterHue = 300;
@@ -68,6 +69,9 @@
     GM_addStyle(`
         html.${themeClass} [${filterAttribute}] {
             filter: hue-rotate(var(${filterRotationProperty}, 118deg)) !important;
+        }
+        html.${themeClass} [${filterAttribute}] [class*="badge--"] {
+            filter: hue-rotate(calc(360deg - var(${filterRotationProperty}, 118deg))) !important;
         }
         #${hostId} {
             position: fixed !important;
@@ -145,9 +149,9 @@
         hoverStrip.setAttribute('aria-hidden', 'true');
         button = document.createElement('button');
         button.type = 'button';
-        button.title = 'Toggle pink theme (Alt+Shift+P)';
-        button.textContent = 'Pink mode';
-        button.setAttribute('aria-label', 'Toggle pink theme');
+        button.title = 'Toggle colour (Alt+Shift+P)';
+        button.textContent = 'Colour';
+        button.setAttribute('aria-label', 'Toggle colour');
         shadow.append(style, hoverStrip, button);
         document.documentElement.append(host);
     }
@@ -249,6 +253,7 @@
         picker.step = '1';
         picker.value = String(filterHue);
         picker.setAttribute('aria-label', 'Choose the replacement hue in degrees');
+        const savedHue = filterHue;
         let previewHue = filterHue;
         const value = document.createElement('output');
         value.value = `${previewHue}\u00b0`;
@@ -258,7 +263,8 @@
             panel.style.setProperty('--preview-hue', previewHue);
             value.value = `${previewHue}\u00b0`;
             value.textContent = `${previewHue}\u00b0`;
-            applyFilterHue(previewHue);
+            filterHue = previewHue;
+            applyFilterHue(previewHue, true);
         };
         picker.addEventListener('input', () => {
             updatePreview(picker.value);
@@ -276,7 +282,8 @@
         cancelButton.className = 'secondary';
         cancelButton.textContent = 'Cancel';
         cancelButton.addEventListener('click', () => {
-            applyFilterHue(filterHue);
+            filterHue = savedHue;
+            applyFilterHue(filterHue, true);
             pickerHost.remove();
         });
         const applyButton = document.createElement('button');
@@ -315,6 +322,11 @@
         for (const element of [document.body, ...document.body.querySelectorAll('*')]) {
             if (!(element instanceof Element) || element === host || element.id === colourPickerHostId) continue;
 
+            if (element.closest(companyBadgeSelector)) {
+                element.removeAttribute(filterAttribute);
+                continue;
+            }
+
             const parent = element.parentElement;
             if (parent?.closest(`[${filterAttribute}]`)) {
                 element.removeAttribute(filterAttribute);
@@ -352,7 +364,6 @@
         }
         document.documentElement.classList.toggle(themeClass, enabled);
         if (button) {
-            button.textContent = enabled ? 'Pink mode on' : 'Pink mode off';
             button.setAttribute('aria-pressed', String(enabled));
         }
     }
@@ -376,8 +387,8 @@
                 toggle();
             }
         });
-        GM_registerMenuCommand('Toggle Business Central pink theme', toggle);
-        GM_registerMenuCommand('Choose pink theme filter colour', openFilterColourPicker);
+        GM_registerMenuCommand('Toggle Business Central colour changer', toggle);
+        GM_registerMenuCommand('Choose colour changer hue', openFilterColourPicker);
     }
 
     GM_addValueChangeListener(filterColourKey, (_key, _oldValue, newValue) => {
