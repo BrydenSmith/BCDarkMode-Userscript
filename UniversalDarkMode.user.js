@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.1
+// @version      1.0.2
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
@@ -21,6 +21,7 @@
     const preferenceKey = `universal-dark-mode-enabled:${location.hostname}`;
     const themeClass = 'tm-universal-dark-mode';
     const hostId = 'tm-universal-dark-mode-toggle';
+    const colourChangerHostId = 'tm-bc-pink-theme-toggle';
     const counterAttribute = 'data-tm-universal-dark-mode-counter-invert';
     if (document.getElementById(hostId)) return;
 
@@ -114,6 +115,14 @@
     shadow.append(style, hoverStrip, button);
     document.body.append(host);
 
+    function updateTogglePosition() {
+        const toggleBottom = document.getElementById(colourChangerHostId) ? '62px' : '6px';
+        if (host.style.getPropertyValue('bottom') !== toggleBottom) {
+            host.style.setProperty('bottom', toggleBottom, 'important');
+        }
+    }
+    updateTogglePosition();
+
     let enabled = GM_getValue(preferenceKey, false) === true;
 
     function updateSurfaceFilters() {
@@ -188,14 +197,16 @@
 
     let surfaceUpdatePending = false;
     const observer = new MutationObserver((mutations) => {
-        if (!enabled || surfaceUpdatePending || !mutations.some((mutation) => mutation.target !== host)) return;
+        if (!mutations.some((mutation) => mutation.target !== host)) return;
+        if (mutations.some((mutation) => mutation.type === 'childList')) updateTogglePosition();
+        if (!enabled || surfaceUpdatePending) return;
         surfaceUpdatePending = true;
         requestAnimationFrame(() => {
             surfaceUpdatePending = false;
             if (enabled) updateSurfaceFilters();
         });
     });
-    observer.observe(document.body, {
+    observer.observe(document.documentElement, {
         subtree: true,
         childList: true,
         attributes: true,
