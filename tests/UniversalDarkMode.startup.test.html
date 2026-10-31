@@ -8,7 +8,11 @@
         window.GM_addStyle = (css) => {
             const style = document.createElement('style');
             style.textContent = css;
-            document.head.append(style);
+            if (new URLSearchParams(location.search).has('delayedStyles')) {
+                setTimeout(() => document.head.append(style), 150);
+            } else {
+                document.head.append(style);
+            }
         };
         window.GM_getValue = (key, fallback) => {
             if (key.startsWith('universal-dark-mode-enabled:')) return mode !== 'disabled';

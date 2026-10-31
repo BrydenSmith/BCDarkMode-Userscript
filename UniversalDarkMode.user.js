@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.9
+// @version      1.0.10
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
@@ -88,8 +88,17 @@
         }
     `);
 
+    const startupStyle = document.createElement('style');
+    startupStyle.textContent = `@media screen {
+        html.${themeClass}.${filterClass} {
+            filter: invert(1) hue-rotate(180deg) contrast(0.85) !important;
+            background: white !important;
+        }
+    }`;
+
     function applyEarlyTheme() {
         if (!document.documentElement) return false;
+        if (!startupStyle.isConnected) (document.head || document.documentElement).append(startupStyle);
         document.documentElement.classList.toggle(themeClass, enabled);
         document.documentElement.classList.toggle(filterClass, !usingColours);
         document.documentElement.classList.toggle(colourClass, usingColours);
