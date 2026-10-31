@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.4
+// @version      1.0.10
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
 // @match        *://*/*
-// @run-at       document-idle
+// @run-at       document-start
 // @noframes
 // @grant        GM_addStyle
 // @grant        GM_getValue
@@ -15,24 +15,46 @@
 // @grant        GM_registerMenuCommand
 // ==/UserScript==
 
-(() => {
+(async () => {
     'use strict';
 
     const preferenceKey = `universal-dark-mode-enabled:${location.hostname}`;
+    const methodPreferenceKey = `universal-dark-mode-method:${location.hostname}`;
+    const repairPreferenceKey = `universal-dark-mode-repair-fixed:${location.hostname}`;
     const imagePreferenceKey = `universal-dark-mode-image-blending:${location.hostname}`;
     const themeClass = 'tm-universal-dark-mode';
+    const colourClass = 'tm-universal-dark-mode-colours';
+    const filterClass = 'tm-universal-dark-mode-filters';
+    const counterAttribute = 'data-tm-universal-dark-mode-counter-invert';
     const imageBlendClass = 'tm-universal-dark-mode-image-blending';
     const imageFilterHostId = 'tm-universal-dark-mode-image-filter';
     const imageFilterId = 'tm-universal-dark-mode-white-key';
     const hostId = 'tm-universal-dark-mode-toggle';
     const colourChangerHostId = 'tm-bc-pink-theme-toggle';
     const surfaceAttribute = 'data-tm-universal-dark-mode-surface';
+    const repairAttribute = 'data-tm-universal-dark-mode-fixed-repair';
+    const amazonCartFix = /(^|\.)amazon\.(co\.uk|com|de|fr|it|es|ca|com\.au|co\.jp)$/.test(location.hostname);
     if (document.getElementById(hostId)) return;
+    let enabled = GM_getValue(preferenceKey, false) === true;
+    let usingColours = GM_getValue(methodPreferenceKey, 'filters') === 'colours';
+    let imageBlending = GM_getValue(imagePreferenceKey, false) === true;
+    let repairEnabled = GM_getValue(repairPreferenceKey, false) === true;
 
     GM_addStyle(`
         @media screen {
+            html.${themeClass}.${filterClass} {
+                filter: invert(1) hue-rotate(180deg) contrast(0.85) !important;
+                background: white !important;
+            }
+            html.${themeClass}.${filterClass} [${counterAttribute}],
+            html.${themeClass}.${filterClass} #${hostId} {
+                filter: invert(1) hue-rotate(180deg) !important;
+            }
             html.${themeClass}.${imageBlendClass} img {
                 filter: url("#${imageFilterId}") !important;
+            }
+            html.${themeClass}.${filterClass}.${imageBlendClass} img[${counterAttribute}] {
+                filter: invert(1) hue-rotate(180deg) url("#${imageFilterId}") !important;
             }
         }
         #${imageFilterHostId} {
@@ -66,8 +88,64 @@
         }
     `);
 
+    const startupStyle = document.createElement('style');
+    startupStyle.textContent = `@media screen {
+        html.${themeClass}.${filterClass} {
+            filter: invert(1) hue-rotate(180deg) contrast(0.85) !important;
+            background: white !important;
+        }
+    }`;
+
+    function applyEarlyTheme() {
+        if (!document.documentElement) return false;
+        if (!startupStyle.isConnected) (document.head || document.documentElement).append(startupStyle);
+        document.documentElement.classList.toggle(themeClass, enabled);
+        document.documentElement.classList.toggle(filterClass, !usingColours);
+        document.documentElement.classList.toggle(colourClass, usingColours);
+        return true;
+    }
+
+    if (!applyEarlyTheme()) {
+        const rootObserver = new MutationObserver(() => {
+            if (applyEarlyTheme()) rootObserver.disconnect();
+        });
+        rootObserver.observe(document, { childList: true });
+    }
+
+    if (document.readyState === 'loading') {
+        await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+    }
+
+    if (document.getElementById(hostId)) return;
     const surfaceStyle = document.createElement('style');
     document.head.append(surfaceStyle);
+    const repairStyle = document.createElement('style');
+    document.head.append(repairStyle);
+    if (amazonCartFix) {
+        GM_addStyle(`
+            @media screen {
+                html.${themeClass}.${filterClass} #nav-flyout-ewc {
+                    right: var(--tm-cart-right, 0px) !important;
+                    top: var(--tm-cart-top, 0px) !important;
+                    height: 100vh !important;
+                }
+            }
+        `);
+    }
+    function alignAmazonCart() {
+        if (!amazonCartFix || !enabled || usingColours) return;
+        const navbar = document.getElementById('navbar');
+        const cart = document.getElementById('nav-flyout-ewc');
+        if (!navbar || !cart) return;
+        const bounds = navbar.getBoundingClientRect();
+        const offsets = {
+            '--tm-cart-right': `${bounds.right - document.documentElement.clientWidth}px`,
+            '--tm-cart-top': `${-bounds.top}px`,
+        };
+        for (const [property, value] of Object.entries(offsets)) {
+            if (cart.style.getPropertyValue(property) !== value) cart.style.setProperty(property, value);
+        }
+    }
     const imageFilter = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     imageFilter.id = imageFilterHostId;
     imageFilter.setAttribute('aria-hidden', 'true');
@@ -146,8 +224,85 @@
     }
     updateTogglePosition();
 
-    let enabled = GM_getValue(preferenceKey, false) === true;
-    let imageBlending = GM_getValue(imagePreferenceKey, false) === true;
+    let fixedCandidates = [];
+    const repairIds = new WeakMap();
+    const repairedElements = new Set();
+    let nextRepairId = 0;
+
+    function clearFixedRepairs() {
+        if (repairStyle.textContent) repairStyle.textContent = '';
+        for (const element of repairedElements) element.removeAttribute(repairAttribute);
+        repairedElements.clear();
+    }
+
+    function repairFixedPositions() {
+        if (!repairEnabled || !enabled || usingColours) {
+            clearFixedRepairs();
+            return;
+        }
+        if (!document.documentElement.classList.contains(themeClass)) return;
+        const candidates = fixedCandidates.filter((element) => element.isConnected);
+        if (!candidates.length) {
+            clearFixedRepairs();
+            return;
+        }
+        const originals = new Map();
+        repairStyle.disabled = true;
+        document.documentElement.classList.remove(filterClass);
+        try {
+            for (const element of candidates) {
+                const computed = getComputedStyle(element);
+                if (computed.position !== 'fixed' || computed.display === 'none' ||
+                    computed.visibility !== 'visible' || computed.transform !== 'none' ||
+                    computed.translate !== 'none' || computed.rotate !== 'none' || computed.scale !== 'none' ||
+                    computed.animationName !== 'none' || computed.transitionDuration.split(',').some((duration) => parseFloat(duration) > 0)) continue;
+                let safe = true;
+                for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                    const style = getComputedStyle(ancestor);
+                    if (style.filter !== 'none' || style.transform !== 'none' || style.perspective !== 'none' ||
+                        style.translate !== 'none' || style.rotate !== 'none' || style.scale !== 'none' ||
+                        style.backdropFilter !== 'none' || /transform|filter|perspective/.test(style.willChange) ||
+                        /layout|paint|strict|content/.test(style.contain) || style.contentVisibility === 'auto' ||
+                        style.animationName !== 'none' || style.transitionDuration.split(',').some((duration) => parseFloat(duration) > 0)) {
+                        safe = false;
+                        break;
+                    }
+                }
+                if (!safe) continue;
+                const bounds = element.getBoundingClientRect();
+                if (bounds.width > 0 && bounds.height > 0) originals.set(element, bounds);
+            }
+        } finally {
+            document.documentElement.classList.add(filterClass);
+        }
+        try {
+            const updates = [];
+            for (const [element, original] of originals) {
+                const actual = element.getBoundingClientRect();
+                if (Math.abs(actual.width - original.width) > 1 || Math.abs(actual.height - original.height) > 1) continue;
+                const offsetX = original.left - actual.left;
+                const offsetY = original.top - actual.top;
+                if (Math.abs(offsetX) <= 1 && Math.abs(offsetY) <= 1) continue;
+                if (!repairIds.has(element)) repairIds.set(element, nextRepairId++);
+                updates.push({ element, id: repairIds.get(element), offsetX, offsetY });
+            }
+            const nextElements = new Set(updates.map((update) => update.element));
+            for (const element of repairedElements) {
+                if (!nextElements.has(element)) element.removeAttribute(repairAttribute);
+            }
+            const rules = [];
+            repairedElements.clear();
+            for (const { element, id, offsetX, offsetY } of updates) {
+                if (element.getAttribute(repairAttribute) !== String(id)) element.setAttribute(repairAttribute, String(id));
+                repairedElements.add(element);
+                rules.push(`html.${themeClass}.${filterClass} [${repairAttribute}="${id}"]{translate:${offsetX}px ${offsetY}px !important}`);
+            }
+            const css = `@media screen{${rules.join('\n')}}`;
+            if (repairStyle.textContent !== css) repairStyle.textContent = css;
+        } finally {
+            repairStyle.disabled = false;
+        }
+    }
 
     function parseColour(value) {
         const channels = value.match(/^rgba?\(([^)]+)\)$/);
@@ -172,7 +327,44 @@
     let nextSurfaceId = 0;
     const excludedSelector = `#${hostId}, #${imageFilterHostId}, img, video, canvas, iframe, embed, object, picture, script, style, link`;
 
+    function updateSurfaceFilters() {
+        const surfaces = new WeakMap();
+        surfaces.set(document.documentElement, { colour: [255, 255, 255], inverted: true });
+        const updates = [];
+        const candidates = [];
+        for (const element of [document.body, ...document.body.querySelectorAll('*')]) {
+            if (!(element instanceof HTMLElement) || element.closest(`#${hostId}, #${imageFilterHostId}`)) continue;
+            if (repairEnabled && !(amazonCartFix && element.id === 'nav-flyout-ewc') &&
+                element.id !== colourChangerHostId && getComputedStyle(element).position === 'fixed') candidates.push(element);
+            const parent = surfaces.get(element.parentElement);
+            let counter = false;
+            if (parent) {
+                if (/^(IMG|VIDEO|CANVAS|IFRAME|EMBED|OBJECT)$/.test(element.tagName)) {
+                    counter = parent.inverted;
+                } else {
+                    const background = parseColour(getComputedStyle(element).backgroundColor);
+                    const colour = parent.colour.map((channel, index) => background ?
+                        background.channels[index] * background.alpha + channel * (1 - background.alpha) : channel);
+                    const inverted = brightness(colour) >= 128;
+                    counter = inverted !== parent.inverted;
+                    surfaces.set(element, { colour, inverted });
+                }
+            }
+            updates.push({ element, counter });
+        }
+        for (const { element, counter } of updates) {
+            if (counter && !element.hasAttribute(counterAttribute)) element.setAttribute(counterAttribute, '');
+            else if (!counter && element.hasAttribute(counterAttribute)) element.removeAttribute(counterAttribute);
+        }
+        fixedCandidates = candidates;
+        repairFixedPositions();
+    }
+
     function updateSurfaceColours(roots = [document.documentElement]) {
+        if (!usingColours) {
+            updateSurfaceFilters();
+            return;
+        }
         const elements = new Set();
         for (const root of roots) {
             if (!(root instanceof Element) || !root.isConnected || root.closest(excludedSelector)) continue;
@@ -214,8 +406,8 @@
                         declarations.push(`${property}:${mixColour(colour, [100, 105, 112], 0.2)} !important`);
                     }
                 }
-                const selector = element === document.documentElement ? `html.${themeClass}` :
-                    `html.${themeClass} [${surfaceAttribute}="${index}"]`;
+                const selector = element === document.documentElement ? `html.${themeClass}.${colourClass}` :
+                    `html.${themeClass}.${colourClass} [${surfaceAttribute}="${index}"]`;
                 const pseudoElements = ['::before', '::after'];
                 if (/^(INPUT|TEXTAREA)$/.test(element.tagName)) pseudoElements.push('::placeholder');
                 let hasPseudoRules = false;
@@ -272,12 +464,17 @@
     }
 
     function render() {
+        document.documentElement.classList.toggle(colourClass, usingColours);
+        document.documentElement.classList.toggle(filterClass, !usingColours);
         if (enabled) updateSurfaceColours();
         document.documentElement.classList.toggle(themeClass, enabled);
         document.documentElement.classList.toggle(imageBlendClass, imageBlending);
         button.textContent = enabled ? 'Light mode' : 'Dark mode';
         button.setAttribute('aria-label', 'Toggle dark mode');
         button.setAttribute('aria-pressed', String(enabled));
+        button.title = `Toggle dark mode (Alt+Shift+U); method: ${usingColours ? 'colour replacement' : 'filter inversion'}`;
+        alignAmazonCart();
+        repairFixedPositions();
     }
 
     function toggle() {
@@ -290,6 +487,19 @@
         imageBlending = !imageBlending;
         document.documentElement.classList.toggle(imageBlendClass, imageBlending);
         GM_setValue(imagePreferenceKey, imageBlending);
+    }
+
+    function toggleMethod() {
+        usingColours = !usingColours;
+        render();
+        GM_setValue(methodPreferenceKey, usingColours ? 'colours' : 'filters');
+    }
+
+    function toggleFixedRepair() {
+        repairEnabled = !repairEnabled;
+        if (repairEnabled && enabled && !usingColours) updateSurfaceFilters();
+        else repairFixedPositions();
+        GM_setValue(repairPreferenceKey, repairEnabled);
     }
 
     button.addEventListener('click', toggle);
@@ -313,7 +523,18 @@
         imageBlending = newValue === true;
         document.documentElement.classList.toggle(imageBlendClass, imageBlending);
     });
+    GM_addValueChangeListener(methodPreferenceKey, (_key, _oldValue, newValue) => {
+        usingColours = newValue === 'colours';
+        render();
+    });
+    GM_addValueChangeListener(repairPreferenceKey, (_key, _oldValue, newValue) => {
+        repairEnabled = newValue === true;
+        if (repairEnabled && enabled && !usingColours) updateSurfaceFilters();
+        else repairFixedPositions();
+    });
     GM_registerMenuCommand('Toggle universal dark mode', toggle);
+    GM_registerMenuCommand('Switch dark mode method (filter inversion / colour replacement)', toggleMethod);
+    GM_registerMenuCommand('Toggle fixed-position repair (experimental)', toggleFixedRepair);
     GM_registerMenuCommand('Toggle white image background removal (also affects white details)', toggleImageBlending);
     render();
 
@@ -344,7 +565,8 @@
             for (const mutation of mutations) {
                 if (mutation.type !== 'childList') continue;
                 for (const node of mutation.addedNodes) {
-                    if (node instanceof Element && node.isConnected && !node.closest(excludedSelector)) {
+                    if (node instanceof Element && node.isConnected &&
+                        (!node.closest(excludedSelector) || node.matches('iframe, embed, object'))) {
                         insertedRoots.add(node);
                     }
                 }
@@ -352,10 +574,11 @@
         }
         for (const mutation of mutations) {
             if (mutation.target === host || host.contains(mutation.target) ||
-                mutation.target === surfaceStyle || surfaceStyle.contains(mutation.target)) continue;
+                mutation.target === surfaceStyle || surfaceStyle.contains(mutation.target) ||
+                mutation.target === repairStyle || repairStyle.contains(mutation.target)) continue;
             if (mutation.target === document.documentElement && mutation.attributeName === 'class') {
                 const withoutTheme = (value) => (value || '').split(/\s+/)
-                    .filter((name) => name && name !== themeClass && name !== imageBlendClass).sort().join(' ');
+                    .filter((name) => name && ![themeClass, imageBlendClass, colourClass, filterClass].includes(name)).sort().join(' ');
                 if (withoutTheme(mutation.oldValue) === withoutTheme(document.documentElement.className)) continue;
             }
             if (mutation.type === 'childList' &&
@@ -388,12 +611,28 @@
             }
             updateSurfaceColours(roots);
         }
+        alignAmazonCart();
     });
     document.addEventListener('load', (event) => {
         if (enabled && event.target instanceof HTMLLinkElement && event.target.rel === 'stylesheet') {
             queueSurfaceUpdate(document.documentElement);
         }
     }, true);
+    window.addEventListener('resize', () => {
+        alignAmazonCart();
+        repairFixedPositions();
+        if (enabled) queueSurfaceUpdate(document.documentElement);
+    });
+    let repairFramePending = false;
+    document.addEventListener('scroll', () => {
+        if (!repairEnabled || !enabled || usingColours || repairFramePending || !fixedCandidates.length) return;
+        repairFramePending = true;
+        requestAnimationFrame(() => {
+            repairFramePending = false;
+            repairFixedPositions();
+        });
+    }, { capture: true, passive: true });
+    if (amazonCartFix) window.addEventListener('scroll', alignAmazonCart, { passive: true });
     observer.observe(document.documentElement, {
         subtree: true,
         childList: true,

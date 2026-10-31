@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Universal Dark Mode Early Startup Tests</title>
+    <script>
+        const mode = new URLSearchParams(location.search).get('mode') || 'filters';
+        window.GM_addStyle = (css) => {
+            const style = document.createElement('style');
+            style.textContent = css;
+            if (new URLSearchParams(location.search).has('delayedStyles')) {
+                setTimeout(() => document.head.append(style), 150);
+            } else {
+                document.head.append(style);
+            }
+        };
+        window.GM_getValue = (key, fallback) => {
+            if (key.startsWith('universal-dark-mode-enabled:')) return mode !== 'disabled';
+            if (key.startsWith('universal-dark-mode-method:')) return mode === 'colours' ? 'colours' : 'filters';
+            return fallback;
+        };
+        window.GM_setValue = () => {};
+        window.GM_addValueChangeListener = () => {};
+        window.GM_registerMenuCommand = () => {};
+    </script>
+    <script src="../UniversalDarkMode.user.js"></script>
+    <script>
+        const early = {
+            bodyExists: !!document.body,
+            filter: getComputedStyle(document.documentElement).filter,
+            toggleExists: !!document.getElementById('tm-universal-dark-mode-toggle'),
+        };
+        window.testResult = new Promise((resolve) => {
+            document.addEventListener('DOMContentLoaded', async () => {
+                await Promise.resolve();
+                const expectedFilter = mode === 'filters';
+                const passed = !early.bodyExists && !early.toggleExists &&
+                    early.filter.includes('invert(1)') === expectedFilter &&
+                    document.querySelectorAll('#tm-universal-dark-mode-toggle').length === 1;
+                const result = { passed, mode, early, message: passed ? 'Early startup passed' : 'Early startup failed' };
+                document.getElementById('results').textContent = JSON.stringify(result, null, 2);
+                resolve(result);
+            }, { once: true });
+        });
+    </script>
+</head>
+<body style="background:white;color:black">
+    <h1>Early startup fixture</h1>
+    <pre id="results">Running...</pre>
+</body>
+</html>

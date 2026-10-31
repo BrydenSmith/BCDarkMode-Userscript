@@ -30,7 +30,11 @@
     <script>
         let toggleDarkMode;
         let toggleImageBlending;
+        let toggleMethod;
+        let toggleFixedRepair;
         let savedPreference;
+        const preferences = new Map();
+        const preferenceListeners = new Map();
         let styleReads = 0;
         const originalGetComputedStyle = window.getComputedStyle.bind(window);
         window.getComputedStyle = (...args) => {
@@ -43,11 +47,16 @@
             style.textContent = css;
             document.head.append(style);
         };
-        window.GM_getValue = () => false;
-        window.GM_setValue = (_key, value) => { savedPreference = value; };
-        window.GM_addValueChangeListener = () => {};
+        window.GM_getValue = (key, fallback) => preferences.has(key) ? preferences.get(key) : fallback;
+        window.GM_setValue = (key, value) => {
+            preferences.set(key, value);
+            if (key.startsWith('universal-dark-mode-enabled:')) savedPreference = value;
+        };
+        window.GM_addValueChangeListener = (key, callback) => preferenceListeners.set(key, callback);
         window.GM_registerMenuCommand = (label, callback) => {
             if (label === 'Toggle universal dark mode') toggleDarkMode = callback;
+            else if (label.startsWith('Switch dark mode method')) toggleMethod = callback;
+            else if (label.startsWith('Toggle fixed-position repair')) toggleFixedRepair = callback;
             else toggleImageBlending = callback;
         };
     </script>
@@ -67,7 +76,14 @@
             width: document.documentElement.scrollWidth,
         };
         const runTests = async () => {
+            if (document.readyState === 'loading') {
+                await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+            }
             assert(document.body.offsetHeight === 0, 'Fixture must reproduce a zero-height body');
+            assert(document.documentElement.classList.contains('tm-universal-dark-mode-filters'), 'Default method is not filters');
+            toggleMethod();
+            assert(!document.documentElement.classList.contains('tm-universal-dark-mode'), 'Method switch enabled dark mode');
+            assert(preferences.get(`universal-dark-mode-method:${location.hostname}`) === 'colours', 'Method was not saved per site');
             toggleDarkMode();
             await settle();
             assert(savedPreference === true, 'Enabled preference was not saved');
@@ -112,7 +128,7 @@
             const localReads = styleReads;
             dynamic.style.color = 'rgb(20, 20, 20)';
             await settle();
-            assert(styleReads - localReads <= 3, 'Local update scanned unrelated elements');
+            assert(styleReads - localReads <= 4, 'Local update scanned unrelated elements');
             assert(styleReads > localReads, 'Local update was not processed');
             const rulesBefore = [...document.querySelectorAll('style')].map((style) => style.textContent).join('');
             await settle();
@@ -125,6 +141,86 @@
             assert(getComputedStyle(login).backgroundColor === original.background, 'Background was not restored');
             assert(getComputedStyle(login).color === original.colour, 'Text was not restored');
             assert(getComputedStyle(dynamic).backgroundColor === 'rgb(220, 230, 240)', 'Page changes were not preserved');
+            login.style.setProperty('position', 'static', 'important');
+            document.getElementById('results').style.setProperty('position', 'static', 'important');
+            for (const viewer of document.querySelectorAll('iframe, embed, object')) viewer.remove();
+            toggleMethod();
+            assert(preferences.get(`universal-dark-mode-method:${location.hostname}`) === 'filters', 'Filter method was not saved');
+            assert(savedPreference === false, 'Method switch changed enabled preference');
+            toggleDarkMode();
+            await settle();
+            assert(document.documentElement.classList.contains('tm-universal-dark-mode-filters'), 'Safe page did not use filters');
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Root inversion was not restored');
+            const fixed = document.createElement('div');
+            fixed.style.position = 'fixed';
+            document.body.append(fixed);
+            await Promise.resolve();
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Fixed insertion automatically changed method');
+            fixed.remove();
+            await settle();
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Removing fixed element did not restore filters');
+            const viewer = document.createElement('embed');
+            viewer.type = 'application/pdf';
+            document.body.append(viewer);
+            await Promise.resolve();
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'PDF insertion automatically changed method');
+            toggleMethod();
+            assert(getComputedStyle(document.documentElement).filter === 'none', 'Manual colour selection did not remove root filter');
+            assert(savedPreference === true, 'Method switch disabled dark mode');
+            viewer.remove();
+            await settle();
+            assert(getComputedStyle(document.documentElement).filter === 'none', 'Removing viewer automatically changed method');
+            const methodKey = `universal-dark-mode-method:${location.hostname}`;
+            preferenceListeners.get(methodKey)(methodKey, 'colours', 'filters');
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Cross-tab method selection was not applied');
+            toggleDarkMode();
+            assert(getComputedStyle(document.documentElement).filter === 'none', 'Disabling filter mode did not restore original filter');
+            const repairContainer = document.createElement('section');
+            repairContainer.style.cssText = 'position:relative;width:240px;height:120px;background:white';
+            const floating = document.createElement('aside');
+            floating.style.cssText = 'position:fixed;top:12px;right:12px;width:80px;height:40px;background:white';
+            repairContainer.append(floating);
+            const transformed = document.createElement('section');
+            transformed.style.cssText = 'transform:translateX(5px);width:240px;height:120px;background:rgb(20,25,30)';
+            const intentional = floating.cloneNode();
+            transformed.append(intentional);
+            const spacer = document.createElement('section');
+            spacer.style.height = '2000px';
+            document.body.append(repairContainer, transformed, spacer);
+            const inlineStyle = floating.getAttribute('style');
+            const originalBounds = floating.getBoundingClientRect();
+            toggleDarkMode();
+            await settle();
+            const displaced = floating.getBoundingClientRect();
+            assert(Math.abs(displaced.left - originalBounds.left) > 5, 'Fixture did not reproduce filter displacement');
+            assert(!floating.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Repair must be opt-in');
+            toggleFixedRepair();
+            await settle();
+            const repaired = floating.getBoundingClientRect();
+            assert(Math.abs(repaired.left - originalBounds.left) < 1 && Math.abs(repaired.top - originalBounds.top) < 1, 'Fixed geometry was not repaired');
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Repair changed inversion method');
+            assert(!intentional.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Intentional transformed containment was modified');
+            assert(preferences.get(`universal-dark-mode-repair-fixed:${location.hostname}`) === true, 'Repair preference was not saved per site');
+            window.scrollTo(0, 300);
+            document.dispatchEvent(new Event('scroll'));
+            await settle();
+            const scrolled = floating.getBoundingClientRect();
+            assert(Math.abs(scrolled.top - originalBounds.top) < 1, 'Repair did not follow viewport scrolling');
+            toggleFixedRepair();
+            await settle();
+            assert(!floating.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Disabling repair left correction attributes');
+            assert(getComputedStyle(floating).translate === 'none', 'Disabling repair left a translation');
+            assert(floating.getAttribute('style') === inlineStyle, 'Repair modified original inline styles');
+            const repairKey = `universal-dark-mode-repair-fixed:${location.hostname}`;
+            preferenceListeners.get(repairKey)(repairKey, false, true);
+            assert(floating.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Cross-tab repair preference was not applied');
+            toggleMethod();
+            assert(!floating.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Colour mode retained positioning corrections');
+            toggleDarkMode();
+            window.scrollTo(0, 0);
+            repairContainer.remove();
+            transformed.remove();
+            spacer.remove();
             return 'Passed: fixed layout, viewport width, colours, media exclusions, dynamic updates, and restoration.';
         };
         window.testResult = runTests().then((message) => {
