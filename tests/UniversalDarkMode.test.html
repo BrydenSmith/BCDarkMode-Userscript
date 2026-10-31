@@ -76,6 +76,9 @@
             width: document.documentElement.scrollWidth,
         };
         const runTests = async () => {
+            if (document.readyState === 'loading') {
+                await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+            }
             assert(document.body.offsetHeight === 0, 'Fixture must reproduce a zero-height body');
             assert(document.documentElement.classList.contains('tm-universal-dark-mode-filters'), 'Default method is not filters');
             toggleMethod();

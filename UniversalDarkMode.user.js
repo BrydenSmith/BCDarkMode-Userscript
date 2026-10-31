@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.8
+// @version      1.0.9
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
 // @match        *://*/*
-// @run-at       document-idle
+// @run-at       document-start
 // @noframes
 // @grant        GM_addStyle
 // @grant        GM_getValue
@@ -15,7 +15,7 @@
 // @grant        GM_registerMenuCommand
 // ==/UserScript==
 
-(() => {
+(async () => {
     'use strict';
 
     const preferenceKey = `universal-dark-mode-enabled:${location.hostname}`;
@@ -35,6 +35,10 @@
     const repairAttribute = 'data-tm-universal-dark-mode-fixed-repair';
     const amazonCartFix = /(^|\.)amazon\.(co\.uk|com|de|fr|it|es|ca|com\.au|co\.jp)$/.test(location.hostname);
     if (document.getElementById(hostId)) return;
+    let enabled = GM_getValue(preferenceKey, false) === true;
+    let usingColours = GM_getValue(methodPreferenceKey, 'filters') === 'colours';
+    let imageBlending = GM_getValue(imagePreferenceKey, false) === true;
+    let repairEnabled = GM_getValue(repairPreferenceKey, false) === true;
 
     GM_addStyle(`
         @media screen {
@@ -84,6 +88,26 @@
         }
     `);
 
+    function applyEarlyTheme() {
+        if (!document.documentElement) return false;
+        document.documentElement.classList.toggle(themeClass, enabled);
+        document.documentElement.classList.toggle(filterClass, !usingColours);
+        document.documentElement.classList.toggle(colourClass, usingColours);
+        return true;
+    }
+
+    if (!applyEarlyTheme()) {
+        const rootObserver = new MutationObserver(() => {
+            if (applyEarlyTheme()) rootObserver.disconnect();
+        });
+        rootObserver.observe(document, { childList: true });
+    }
+
+    if (document.readyState === 'loading') {
+        await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+    }
+
+    if (document.getElementById(hostId)) return;
     const surfaceStyle = document.createElement('style');
     document.head.append(surfaceStyle);
     const repairStyle = document.createElement('style');
@@ -191,9 +215,6 @@
     }
     updateTogglePosition();
 
-    let enabled = GM_getValue(preferenceKey, false) === true;
-    let imageBlending = GM_getValue(imagePreferenceKey, false) === true;
-    let repairEnabled = GM_getValue(repairPreferenceKey, false) === true;
     let fixedCandidates = [];
     const repairIds = new WeakMap();
     const repairedElements = new Set();
@@ -296,7 +317,6 @@
     const surfaceIds = new WeakMap();
     let nextSurfaceId = 0;
     const excludedSelector = `#${hostId}, #${imageFilterHostId}, img, video, canvas, iframe, embed, object, picture, script, style, link`;
-    let usingColours = GM_getValue(methodPreferenceKey, 'filters') === 'colours';
 
     function updateSurfaceFilters() {
         const surfaces = new WeakMap();
