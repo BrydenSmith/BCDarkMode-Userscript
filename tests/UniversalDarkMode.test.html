@@ -30,7 +30,10 @@
     <script>
         let toggleDarkMode;
         let toggleImageBlending;
+        let toggleMethod;
         let savedPreference;
+        const preferences = new Map();
+        const preferenceListeners = new Map();
         let styleReads = 0;
         const originalGetComputedStyle = window.getComputedStyle.bind(window);
         window.getComputedStyle = (...args) => {
@@ -43,11 +46,15 @@
             style.textContent = css;
             document.head.append(style);
         };
-        window.GM_getValue = () => false;
-        window.GM_setValue = (_key, value) => { savedPreference = value; };
-        window.GM_addValueChangeListener = () => {};
+        window.GM_getValue = (key, fallback) => preferences.has(key) ? preferences.get(key) : fallback;
+        window.GM_setValue = (key, value) => {
+            preferences.set(key, value);
+            if (key.startsWith('universal-dark-mode-enabled:')) savedPreference = value;
+        };
+        window.GM_addValueChangeListener = (key, callback) => preferenceListeners.set(key, callback);
         window.GM_registerMenuCommand = (label, callback) => {
             if (label === 'Toggle universal dark mode') toggleDarkMode = callback;
+            else if (label.startsWith('Switch dark mode method')) toggleMethod = callback;
             else toggleImageBlending = callback;
         };
     </script>
@@ -68,6 +75,10 @@
         };
         const runTests = async () => {
             assert(document.body.offsetHeight === 0, 'Fixture must reproduce a zero-height body');
+            assert(document.documentElement.classList.contains('tm-universal-dark-mode-filters'), 'Default method is not filters');
+            toggleMethod();
+            assert(!document.documentElement.classList.contains('tm-universal-dark-mode'), 'Method switch enabled dark mode');
+            assert(preferences.get(`universal-dark-mode-method:${location.hostname}`) === 'colours', 'Method was not saved per site');
             toggleDarkMode();
             await settle();
             assert(savedPreference === true, 'Enabled preference was not saved');
@@ -128,6 +139,9 @@
             login.style.setProperty('position', 'static', 'important');
             document.getElementById('results').style.setProperty('position', 'static', 'important');
             for (const viewer of document.querySelectorAll('iframe, embed, object')) viewer.remove();
+            toggleMethod();
+            assert(preferences.get(`universal-dark-mode-method:${location.hostname}`) === 'filters', 'Filter method was not saved');
+            assert(savedPreference === false, 'Method switch changed enabled preference');
             toggleDarkMode();
             await settle();
             assert(document.documentElement.classList.contains('tm-universal-dark-mode-filters'), 'Safe page did not use filters');
@@ -136,7 +150,7 @@
             fixed.style.position = 'fixed';
             document.body.append(fixed);
             await Promise.resolve();
-            assert(getComputedStyle(document.documentElement).filter === 'none', 'Fixed insertion did not switch before paint');
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Fixed insertion automatically changed method');
             fixed.remove();
             await settle();
             assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Removing fixed element did not restore filters');
@@ -144,10 +158,16 @@
             viewer.type = 'application/pdf';
             document.body.append(viewer);
             await Promise.resolve();
-            assert(getComputedStyle(document.documentElement).filter === 'none', 'PDF insertion did not switch before paint');
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'PDF insertion automatically changed method');
+            toggleMethod();
+            assert(getComputedStyle(document.documentElement).filter === 'none', 'Manual colour selection did not remove root filter');
+            assert(savedPreference === true, 'Method switch disabled dark mode');
             viewer.remove();
             await settle();
-            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Removing viewer did not restore filters');
+            assert(getComputedStyle(document.documentElement).filter === 'none', 'Removing viewer automatically changed method');
+            const methodKey = `universal-dark-mode-method:${location.hostname}`;
+            preferenceListeners.get(methodKey)(methodKey, 'colours', 'filters');
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Cross-tab method selection was not applied');
             toggleDarkMode();
             assert(getComputedStyle(document.documentElement).filter === 'none', 'Disabling filter mode did not restore original filter');
             return 'Passed: fixed layout, viewport width, colours, media exclusions, dynamic updates, and restoration.';

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.5
+// @version      1.0.6
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
@@ -19,6 +19,7 @@
     'use strict';
 
     const preferenceKey = `universal-dark-mode-enabled:${location.hostname}`;
+    const methodPreferenceKey = `universal-dark-mode-method:${location.hostname}`;
     const imagePreferenceKey = `universal-dark-mode-image-blending:${location.hostname}`;
     const themeClass = 'tm-universal-dark-mode';
     const colourClass = 'tm-universal-dark-mode-colours';
@@ -185,29 +186,7 @@
     const surfaceIds = new WeakMap();
     let nextSurfaceId = 0;
     const excludedSelector = `#${hostId}, #${imageFilterHostId}, img, video, canvas, iframe, embed, object, picture, script, style, link`;
-    const hazards = new Set();
-    let usingColours = false;
-
-    function selectMethod(roots) {
-        for (const element of hazards) {
-            if (!element.isConnected || roots.some((root) => root.contains(element))) hazards.delete(element);
-        }
-        for (const root of roots) {
-            if (!(root instanceof Element) || !root.isConnected) continue;
-            for (const element of [root, ...root.querySelectorAll('*')]) {
-                if (element.closest(`#${hostId}, #${imageFilterHostId}, #${colourChangerHostId}, script, style`)) continue;
-                if (/^(IFRAME|EMBED|OBJECT)$/.test(element.tagName) || getComputedStyle(element).position === 'fixed') {
-                    hazards.add(element);
-                }
-            }
-        }
-        const nextUsingColours = hazards.size > 0;
-        const changed = nextUsingColours !== usingColours;
-        usingColours = nextUsingColours;
-        document.documentElement.classList.toggle(colourClass, usingColours);
-        document.documentElement.classList.toggle(filterClass, !usingColours);
-        return changed;
-    }
+    let usingColours = GM_getValue(methodPreferenceKey, 'filters') === 'colours';
 
     function updateSurfaceFilters() {
         const surfaces = new WeakMap();
@@ -238,7 +217,6 @@
     }
 
     function updateSurfaceColours(roots = [document.documentElement]) {
-        if (selectMethod(roots)) roots = [document.documentElement];
         if (!usingColours) {
             updateSurfaceFilters();
             return;
@@ -342,12 +320,15 @@
     }
 
     function render() {
+        document.documentElement.classList.toggle(colourClass, usingColours);
+        document.documentElement.classList.toggle(filterClass, !usingColours);
         if (enabled) updateSurfaceColours();
         document.documentElement.classList.toggle(themeClass, enabled);
         document.documentElement.classList.toggle(imageBlendClass, imageBlending);
         button.textContent = enabled ? 'Light mode' : 'Dark mode';
         button.setAttribute('aria-label', 'Toggle dark mode');
         button.setAttribute('aria-pressed', String(enabled));
+        button.title = `Toggle dark mode (Alt+Shift+U); method: ${usingColours ? 'colour replacement' : 'filter inversion'}`;
     }
 
     function toggle() {
@@ -360,6 +341,12 @@
         imageBlending = !imageBlending;
         document.documentElement.classList.toggle(imageBlendClass, imageBlending);
         GM_setValue(imagePreferenceKey, imageBlending);
+    }
+
+    function toggleMethod() {
+        usingColours = !usingColours;
+        render();
+        GM_setValue(methodPreferenceKey, usingColours ? 'colours' : 'filters');
     }
 
     button.addEventListener('click', toggle);
@@ -383,7 +370,12 @@
         imageBlending = newValue === true;
         document.documentElement.classList.toggle(imageBlendClass, imageBlending);
     });
+    GM_addValueChangeListener(methodPreferenceKey, (_key, _oldValue, newValue) => {
+        usingColours = newValue === 'colours';
+        render();
+    });
     GM_registerMenuCommand('Toggle universal dark mode', toggle);
+    GM_registerMenuCommand('Switch dark mode method (filter inversion / colour replacement)', toggleMethod);
     GM_registerMenuCommand('Toggle white image background removal (also affects white details)', toggleImageBlending);
     render();
 
