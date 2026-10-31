@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.4
+// @version      1.0.5
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
@@ -21,6 +21,9 @@
     const preferenceKey = `universal-dark-mode-enabled:${location.hostname}`;
     const imagePreferenceKey = `universal-dark-mode-image-blending:${location.hostname}`;
     const themeClass = 'tm-universal-dark-mode';
+    const colourClass = 'tm-universal-dark-mode-colours';
+    const filterClass = 'tm-universal-dark-mode-filters';
+    const counterAttribute = 'data-tm-universal-dark-mode-counter-invert';
     const imageBlendClass = 'tm-universal-dark-mode-image-blending';
     const imageFilterHostId = 'tm-universal-dark-mode-image-filter';
     const imageFilterId = 'tm-universal-dark-mode-white-key';
@@ -31,8 +34,19 @@
 
     GM_addStyle(`
         @media screen {
+            html.${themeClass}.${filterClass} {
+                filter: invert(1) hue-rotate(180deg) contrast(0.85) !important;
+                background: white !important;
+            }
+            html.${themeClass}.${filterClass} [${counterAttribute}],
+            html.${themeClass}.${filterClass} #${hostId} {
+                filter: invert(1) hue-rotate(180deg) !important;
+            }
             html.${themeClass}.${imageBlendClass} img {
                 filter: url("#${imageFilterId}") !important;
+            }
+            html.${themeClass}.${filterClass}.${imageBlendClass} img[${counterAttribute}] {
+                filter: invert(1) hue-rotate(180deg) url("#${imageFilterId}") !important;
             }
         }
         #${imageFilterHostId} {
@@ -171,8 +185,64 @@
     const surfaceIds = new WeakMap();
     let nextSurfaceId = 0;
     const excludedSelector = `#${hostId}, #${imageFilterHostId}, img, video, canvas, iframe, embed, object, picture, script, style, link`;
+    const hazards = new Set();
+    let usingColours = false;
+
+    function selectMethod(roots) {
+        for (const element of hazards) {
+            if (!element.isConnected || roots.some((root) => root.contains(element))) hazards.delete(element);
+        }
+        for (const root of roots) {
+            if (!(root instanceof Element) || !root.isConnected) continue;
+            for (const element of [root, ...root.querySelectorAll('*')]) {
+                if (element.closest(`#${hostId}, #${imageFilterHostId}, #${colourChangerHostId}, script, style`)) continue;
+                if (/^(IFRAME|EMBED|OBJECT)$/.test(element.tagName) || getComputedStyle(element).position === 'fixed') {
+                    hazards.add(element);
+                }
+            }
+        }
+        const nextUsingColours = hazards.size > 0;
+        const changed = nextUsingColours !== usingColours;
+        usingColours = nextUsingColours;
+        document.documentElement.classList.toggle(colourClass, usingColours);
+        document.documentElement.classList.toggle(filterClass, !usingColours);
+        return changed;
+    }
+
+    function updateSurfaceFilters() {
+        const surfaces = new WeakMap();
+        surfaces.set(document.documentElement, { colour: [255, 255, 255], inverted: true });
+        const updates = [];
+        for (const element of [document.body, ...document.body.querySelectorAll('*')]) {
+            if (!(element instanceof HTMLElement) || element.closest(`#${hostId}, #${imageFilterHostId}`)) continue;
+            const parent = surfaces.get(element.parentElement);
+            let counter = false;
+            if (parent) {
+                if (/^(IMG|VIDEO|CANVAS|IFRAME|EMBED|OBJECT)$/.test(element.tagName)) {
+                    counter = parent.inverted;
+                } else {
+                    const background = parseColour(getComputedStyle(element).backgroundColor);
+                    const colour = parent.colour.map((channel, index) => background ?
+                        background.channels[index] * background.alpha + channel * (1 - background.alpha) : channel);
+                    const inverted = brightness(colour) >= 128;
+                    counter = inverted !== parent.inverted;
+                    surfaces.set(element, { colour, inverted });
+                }
+            }
+            updates.push({ element, counter });
+        }
+        for (const { element, counter } of updates) {
+            if (counter && !element.hasAttribute(counterAttribute)) element.setAttribute(counterAttribute, '');
+            else if (!counter && element.hasAttribute(counterAttribute)) element.removeAttribute(counterAttribute);
+        }
+    }
 
     function updateSurfaceColours(roots = [document.documentElement]) {
+        if (selectMethod(roots)) roots = [document.documentElement];
+        if (!usingColours) {
+            updateSurfaceFilters();
+            return;
+        }
         const elements = new Set();
         for (const root of roots) {
             if (!(root instanceof Element) || !root.isConnected || root.closest(excludedSelector)) continue;
@@ -214,8 +284,8 @@
                         declarations.push(`${property}:${mixColour(colour, [100, 105, 112], 0.2)} !important`);
                     }
                 }
-                const selector = element === document.documentElement ? `html.${themeClass}` :
-                    `html.${themeClass} [${surfaceAttribute}="${index}"]`;
+                const selector = element === document.documentElement ? `html.${themeClass}.${colourClass}` :
+                    `html.${themeClass}.${colourClass} [${surfaceAttribute}="${index}"]`;
                 const pseudoElements = ['::before', '::after'];
                 if (/^(INPUT|TEXTAREA)$/.test(element.tagName)) pseudoElements.push('::placeholder');
                 let hasPseudoRules = false;
@@ -344,7 +414,8 @@
             for (const mutation of mutations) {
                 if (mutation.type !== 'childList') continue;
                 for (const node of mutation.addedNodes) {
-                    if (node instanceof Element && node.isConnected && !node.closest(excludedSelector)) {
+                    if (node instanceof Element && node.isConnected &&
+                        (!node.closest(excludedSelector) || node.matches('iframe, embed, object'))) {
                         insertedRoots.add(node);
                     }
                 }
@@ -355,7 +426,7 @@
                 mutation.target === surfaceStyle || surfaceStyle.contains(mutation.target)) continue;
             if (mutation.target === document.documentElement && mutation.attributeName === 'class') {
                 const withoutTheme = (value) => (value || '').split(/\s+/)
-                    .filter((name) => name && name !== themeClass && name !== imageBlendClass).sort().join(' ');
+                    .filter((name) => name && ![themeClass, imageBlendClass, colourClass, filterClass].includes(name)).sort().join(' ');
                 if (withoutTheme(mutation.oldValue) === withoutTheme(document.documentElement.className)) continue;
             }
             if (mutation.type === 'childList' &&
@@ -394,6 +465,9 @@
             queueSurfaceUpdate(document.documentElement);
         }
     }, true);
+    window.addEventListener('resize', () => {
+        if (enabled) queueSurfaceUpdate(document.documentElement);
+    });
     observer.observe(document.documentElement, {
         subtree: true,
         childList: true,
