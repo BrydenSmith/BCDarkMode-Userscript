@@ -21,6 +21,7 @@
         <label>Company <input type="text" placeholder="company"></label>
         <button type="button">Continue</button>
         <p id="existing-dark">Existing dark surface</p>
+        <img id="product-image" alt="Product fixture" width="32" height="32" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP1sAAAAASUVORK5CYII=">
         <iframe title="Embedded page" srcdoc="<p>Embedded page</p>"></iframe>
         <embed type="application/pdf" aria-label="PDF embed">
         <object type="application/pdf" aria-label="PDF object"><p>PDF fallback</p></object>
@@ -28,7 +29,14 @@
     <pre id="results">Running...</pre>
     <script>
         let toggleDarkMode;
+        let toggleImageBlending;
         let savedPreference;
+        let styleReads = 0;
+        const originalGetComputedStyle = window.getComputedStyle.bind(window);
+        window.getComputedStyle = (...args) => {
+            styleReads++;
+            return originalGetComputedStyle(...args);
+        };
         window.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 0);
         window.GM_addStyle = (css) => {
             const style = document.createElement('style');
@@ -38,12 +46,18 @@
         window.GM_getValue = () => false;
         window.GM_setValue = (_key, value) => { savedPreference = value; };
         window.GM_addValueChangeListener = () => {};
-        window.GM_registerMenuCommand = (_label, callback) => { toggleDarkMode = callback; };
+        window.GM_registerMenuCommand = (label, callback) => {
+            if (label === 'Toggle universal dark mode') toggleDarkMode = callback;
+            else toggleImageBlending = callback;
+        };
     </script>
     <script src="../UniversalDarkMode.user.js"></script>
     <script>
         const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
-        const settle = async () => { await nextFrame(); await nextFrame(); await nextFrame(); };
+        const settle = async () => {
+            await nextFrame();
+            await new Promise((resolve) => setTimeout(resolve, 120));
+        };
         const assert = (condition, message) => { if (!condition) throw new Error(message); };
         const login = document.getElementById('login');
         const original = {
@@ -60,6 +74,14 @@
             assert(JSON.stringify(login.getBoundingClientRect().toJSON()) === original.rect, 'Fixed panel moved');
             assert(document.documentElement.scrollWidth === original.width, 'Page width changed');
             assert(getComputedStyle(login).backgroundColor !== original.background, 'Light background did not darken');
+            assert(getComputedStyle(login).backgroundColor === 'rgb(25, 27, 28)', 'Surface is not the darker palette');
+            const image = document.getElementById('product-image');
+            assert(getComputedStyle(image).filter === 'none', 'Image background removal must be opt-in');
+            const imageReads = styleReads;
+            toggleImageBlending();
+            await settle();
+            assert(styleReads === imageReads, 'Image blending triggered a colour scan');
+            assert(getComputedStyle(image).filter.includes('tm-universal-dark-mode-white-key'), 'Image background removal did not enable');
             assert(getComputedStyle(login).color !== original.colour, 'Dark text did not lighten');
             assert(getComputedStyle(document.querySelector('label'), '::after').color !== 'rgb(6, 6, 45)', 'Generated text did not lighten');
             assert(getComputedStyle(document.querySelector('input'), '::placeholder').color !== 'rgb(69, 69, 161)', 'Placeholder did not lighten');
@@ -77,10 +99,21 @@
             const dynamic = document.createElement('p');
             dynamic.style.cssText = 'background-color:rgb(250,250,250);color:rgb(10,10,10)';
             login.append(dynamic);
+            await Promise.resolve();
+            assert(getComputedStyle(dynamic).backgroundColor !== 'rgb(250, 250, 250)', 'Inserted surface flashed white before the debounce');
             await settle();
             assert(getComputedStyle(dynamic).backgroundColor !== 'rgb(250, 250, 250)', 'Dynamic surface was not themed');
             dynamic.style.backgroundColor = 'rgb(220, 230, 240)';
             await settle();
+            const textReads = styleReads;
+            for (let index = 0; index < 100; index++) dynamic.textContent = `Text update ${index}`;
+            await settle();
+            assert(styleReads === textReads, 'Text-only updates triggered style reads');
+            const localReads = styleReads;
+            dynamic.style.color = 'rgb(20, 20, 20)';
+            await settle();
+            assert(styleReads - localReads <= 3, 'Local update scanned unrelated elements');
+            assert(styleReads > localReads, 'Local update was not processed');
             const rulesBefore = [...document.querySelectorAll('style')].map((style) => style.textContent).join('');
             await settle();
             const rulesAfter = [...document.querySelectorAll('style')].map((style) => style.textContent).join('');
@@ -88,6 +121,7 @@
             toggleDarkMode();
             await settle();
             assert(savedPreference === false, 'Disabled preference was not saved');
+            assert(getComputedStyle(image).filter === 'none', 'Image background removal remained active in light mode');
             assert(getComputedStyle(login).backgroundColor === original.background, 'Background was not restored');
             assert(getComputedStyle(login).color === original.colour, 'Text was not restored');
             assert(getComputedStyle(dynamic).backgroundColor === 'rgb(220, 230, 240)', 'Page changes were not preserved');

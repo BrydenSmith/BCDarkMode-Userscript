@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.3
+// @version      1.0.4
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
@@ -19,13 +19,29 @@
     'use strict';
 
     const preferenceKey = `universal-dark-mode-enabled:${location.hostname}`;
+    const imagePreferenceKey = `universal-dark-mode-image-blending:${location.hostname}`;
     const themeClass = 'tm-universal-dark-mode';
+    const imageBlendClass = 'tm-universal-dark-mode-image-blending';
+    const imageFilterHostId = 'tm-universal-dark-mode-image-filter';
+    const imageFilterId = 'tm-universal-dark-mode-white-key';
     const hostId = 'tm-universal-dark-mode-toggle';
     const colourChangerHostId = 'tm-bc-pink-theme-toggle';
     const surfaceAttribute = 'data-tm-universal-dark-mode-surface';
     if (document.getElementById(hostId)) return;
 
     GM_addStyle(`
+        @media screen {
+            html.${themeClass}.${imageBlendClass} img {
+                filter: url("#${imageFilterId}") !important;
+            }
+        }
+        #${imageFilterHostId} {
+            position: absolute !important;
+            width: 0 !important;
+            height: 0 !important;
+            overflow: hidden !important;
+            pointer-events: none !important;
+        }
         #${hostId} {
             all: initial !important;
             box-sizing: border-box !important;
@@ -52,6 +68,18 @@
 
     const surfaceStyle = document.createElement('style');
     document.head.append(surfaceStyle);
+    const imageFilter = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    imageFilter.id = imageFilterHostId;
+    imageFilter.setAttribute('aria-hidden', 'true');
+    imageFilter.innerHTML = `
+        <defs>
+            <filter id="${imageFilterId}" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  -10 -10 -10 0 30" result="whiteMask" />
+                <feComposite in="SourceGraphic" in2="whiteMask" operator="in" />
+            </filter>
+        </defs>
+    `;
+    document.body.append(imageFilter);
     const host = document.createElement('div');
     host.id = hostId;
     const shadow = host.attachShadow({ mode: 'open' });
@@ -119,6 +147,7 @@
     updateTogglePosition();
 
     let enabled = GM_getValue(preferenceKey, false) === true;
+    let imageBlending = GM_getValue(imagePreferenceKey, false) === true;
 
     function parseColour(value) {
         const channels = value.match(/^rgba?\(([^)]+)\)$/);
@@ -138,26 +167,37 @@
         return `rgba(${channels.join(',')},${colour.alpha})`;
     }
 
-    function updateSurfaceColours() {
-        const surfaces = new WeakSet();
-        const rules = [];
+    const surfaceRules = new Map();
+    const surfaceIds = new WeakMap();
+    let nextSurfaceId = 0;
+    const excludedSelector = `#${hostId}, #${imageFilterHostId}, img, video, canvas, iframe, embed, object, picture, script, style, link`;
+
+    function updateSurfaceColours(roots = [document.documentElement]) {
+        const elements = new Set();
+        for (const root of roots) {
+            if (!(root instanceof Element) || !root.isConnected || root.closest(excludedSelector)) continue;
+            elements.add(root);
+            for (const element of root.querySelectorAll('*')) {
+                if (!element.closest(excludedSelector)) elements.add(element);
+            }
+        }
+        if (!elements.size && ![...surfaceRules.keys()].some((element) => !element.isConnected)) return;
+        const updates = [];
         surfaceStyle.disabled = true;
         try {
-            const elements = [document.documentElement, document.body, ...document.body.querySelectorAll('*')];
-            for (const [index, element] of elements.entries()) {
-                element.removeAttribute(surfaceAttribute);
+            for (const element of elements) {
                 if (element === host || !(element instanceof HTMLElement || element instanceof SVGElement)) continue;
-                if (element !== document.documentElement && !surfaces.has(element.parentElement)) continue;
-                if (/^(IMG|VIDEO|CANVAS|IFRAME|EMBED|OBJECT|PICTURE|SCRIPT|STYLE|LINK)$/.test(element.tagName)) continue;
+                if (!surfaceIds.has(element)) surfaceIds.set(element, nextSurfaceId++);
+                const index = surfaceIds.get(element);
+                const rules = [];
 
                 const computed = getComputedStyle(element);
                 const background = parseColour(computed.backgroundColor);
-                surfaces.add(element);
                 const declarations = [];
                 if (background && background.alpha > 0 && brightness(background.channels) >= 128) {
-                    declarations.push(`background-color:${mixColour(background, [21, 23, 25], 0.15)} !important`);
+                    declarations.push(`background-color:${mixColour(background, [15, 17, 19], 0.04)} !important`);
                 } else if (element === document.documentElement && (!background || background.alpha === 0)) {
-                    declarations.push('background-color:rgb(21,23,25) !important');
+                    declarations.push('background-color:rgb(15,17,19) !important');
                 }
 
                 for (const property of ['color', 'fill', 'stroke']) {
@@ -189,7 +229,7 @@
                     }
                     const pseudoBackground = parseColour(pseudo.backgroundColor);
                     if (pseudoBackground && pseudoBackground.alpha > 0 && brightness(pseudoBackground.channels) >= 128) {
-                        pseudoDeclarations.push(`background-color:${mixColour(pseudoBackground, [21, 23, 25], 0.15)} !important`);
+                        pseudoDeclarations.push(`background-color:${mixColour(pseudoBackground, [15, 17, 19], 0.04)} !important`);
                     }
                     if (pseudoDeclarations.length) {
                         hasPseudoRules = true;
@@ -197,11 +237,35 @@
                     }
                 }
                 if (declarations.length || hasPseudoRules) {
-                    element.setAttribute(surfaceAttribute, String(index));
                     if (declarations.length) rules.push(`${selector}{${declarations.join(';')}}`);
                 }
+                updates.push({ element, index, rules: rules.join('\n') });
             }
-            surfaceStyle.textContent = `@media screen{${rules.join('\n')}}`;
+            let changed = false;
+            for (const { element, index, rules } of updates) {
+                if (rules) {
+                    if (element.getAttribute(surfaceAttribute) !== String(index)) {
+                        element.setAttribute(surfaceAttribute, String(index));
+                    }
+                    if (surfaceRules.get(element) !== rules) {
+                        surfaceRules.set(element, rules);
+                        changed = true;
+                    }
+                } else {
+                    element.removeAttribute(surfaceAttribute);
+                    if (surfaceRules.delete(element)) changed = true;
+                }
+            }
+            for (const element of surfaceRules.keys()) {
+                if (!element.isConnected || element.closest(excludedSelector)) {
+                    element.removeAttribute(surfaceAttribute);
+                    surfaceRules.delete(element);
+                    changed = true;
+                }
+            }
+            if (changed) {
+                surfaceStyle.textContent = `@media screen{${[...surfaceRules.values()].join('\n')}}`;
+            }
         } finally {
             surfaceStyle.disabled = false;
         }
@@ -210,6 +274,7 @@
     function render() {
         if (enabled) updateSurfaceColours();
         document.documentElement.classList.toggle(themeClass, enabled);
+        document.documentElement.classList.toggle(imageBlendClass, imageBlending);
         button.textContent = enabled ? 'Light mode' : 'Dark mode';
         button.setAttribute('aria-label', 'Toggle dark mode');
         button.setAttribute('aria-pressed', String(enabled));
@@ -219,6 +284,12 @@
         enabled = !enabled;
         render();
         GM_setValue(preferenceKey, enabled);
+    }
+
+    function toggleImageBlending() {
+        imageBlending = !imageBlending;
+        document.documentElement.classList.toggle(imageBlendClass, imageBlending);
+        GM_setValue(imagePreferenceKey, imageBlending);
     }
 
     button.addEventListener('click', toggle);
@@ -238,25 +309,96 @@
         enabled = newValue === true;
         render();
     });
+    GM_addValueChangeListener(imagePreferenceKey, (_key, _oldValue, newValue) => {
+        imageBlending = newValue === true;
+        document.documentElement.classList.toggle(imageBlendClass, imageBlending);
+    });
     GM_registerMenuCommand('Toggle universal dark mode', toggle);
+    GM_registerMenuCommand('Toggle white image background removal (also affects white details)', toggleImageBlending);
     render();
 
     let surfaceUpdatePending = false;
-    const observer = new MutationObserver((mutations) => {
-        if (!mutations.some((mutation) => mutation.target !== host &&
-            mutation.target !== surfaceStyle && !surfaceStyle.contains(mutation.target))) return;
-        if (mutations.some((mutation) => mutation.type === 'childList')) updateTogglePosition();
-        if (!enabled || surfaceUpdatePending) return;
+    const pendingRoots = new Set();
+    function outermostRoots(roots) {
+        const candidates = [...roots];
+        return candidates.filter((candidate) =>
+            !candidates.some((ancestor) => ancestor !== candidate && ancestor.contains(candidate))
+        );
+    }
+
+    function queueSurfaceUpdate(root) {
+        pendingRoots.add(root);
+        if (surfaceUpdatePending) return;
         surfaceUpdatePending = true;
-        requestAnimationFrame(() => {
+        setTimeout(() => {
             surfaceUpdatePending = false;
-            if (enabled) updateSurfaceColours();
-        });
+            const roots = outermostRoots(pendingRoots);
+            pendingRoots.clear();
+            if (enabled) updateSurfaceColours(roots);
+        }, 80);
+    }
+
+    const observer = new MutationObserver((mutations) => {
+        const insertedRoots = new Set();
+        if (enabled) {
+            for (const mutation of mutations) {
+                if (mutation.type !== 'childList') continue;
+                for (const node of mutation.addedNodes) {
+                    if (node instanceof Element && node.isConnected && !node.closest(excludedSelector)) {
+                        insertedRoots.add(node);
+                    }
+                }
+            }
+        }
+        for (const mutation of mutations) {
+            if (mutation.target === host || host.contains(mutation.target) ||
+                mutation.target === surfaceStyle || surfaceStyle.contains(mutation.target)) continue;
+            if (mutation.target === document.documentElement && mutation.attributeName === 'class') {
+                const withoutTheme = (value) => (value || '').split(/\s+/)
+                    .filter((name) => name && name !== themeClass && name !== imageBlendClass).sort().join(' ');
+                if (withoutTheme(mutation.oldValue) === withoutTheme(document.documentElement.className)) continue;
+            }
+            if (mutation.type === 'childList' &&
+                [...mutation.addedNodes, ...mutation.removedNodes].some((node) => node instanceof Element)) {
+                updateTogglePosition();
+            }
+            if (!enabled) continue;
+            if (mutation.target instanceof Element && mutation.target.closest('style')) {
+                queueSurfaceUpdate(document.documentElement);
+            } else if (mutation.type === 'attributes') {
+                if (mutation.target instanceof HTMLLinkElement) queueSurfaceUpdate(document.documentElement);
+                else if (![...insertedRoots].some((root) => root.contains(mutation.target))) {
+                    queueSurfaceUpdate(mutation.target);
+                }
+            } else {
+                for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
+                    if (!(node instanceof Element)) continue;
+                    if (node.matches('style, link') || node.querySelector('style, link')) {
+                        queueSurfaceUpdate(document.documentElement);
+                    } else if (!insertedRoots.has(node)) {
+                        queueSurfaceUpdate(node);
+                    }
+                }
+            }
+        }
+        if (insertedRoots.size) {
+            const roots = outermostRoots(insertedRoots);
+            for (const pending of pendingRoots) {
+                if (roots.some((root) => root.contains(pending))) pendingRoots.delete(pending);
+            }
+            updateSurfaceColours(roots);
+        }
     });
+    document.addEventListener('load', (event) => {
+        if (enabled && event.target instanceof HTMLLinkElement && event.target.rel === 'stylesheet') {
+            queueSurfaceUpdate(document.documentElement);
+        }
+    }, true);
     observer.observe(document.documentElement, {
         subtree: true,
         childList: true,
         attributes: true,
-        attributeFilter: ['class', 'style'],
+        attributeOldValue: true,
+        attributeFilter: ['class', 'style', 'href', 'media', 'disabled'],
     });
 })();
