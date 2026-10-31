@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Universal Dark Mode Toggle
 // @namespace    local.universal.darkmode
-// @version      1.0.2
+// @version      1.0.3
 // @updateURL    https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @downloadURL  https://raw.githubusercontent.com/BrydenSmith/BCDarkMode-Userscript/main/UniversalDarkMode.user.js
 // @description  Toggle a reversible dark appearance on websites; remembers your preference across tabs.
@@ -22,24 +22,21 @@
     const themeClass = 'tm-universal-dark-mode';
     const hostId = 'tm-universal-dark-mode-toggle';
     const colourChangerHostId = 'tm-bc-pink-theme-toggle';
-    const counterAttribute = 'data-tm-universal-dark-mode-counter-invert';
+    const surfaceAttribute = 'data-tm-universal-dark-mode-surface';
     if (document.getElementById(hostId)) return;
 
     GM_addStyle(`
-        html.${themeClass} {
-            filter: invert(1) hue-rotate(180deg) contrast(0.85) !important;
-            background: white !important;
-        }
-        html.${themeClass} [${counterAttribute}],
-        html.${themeClass} #${hostId} {
-            filter: invert(1) hue-rotate(180deg) !important;
-        }
         #${hostId} {
+            all: initial !important;
+            box-sizing: border-box !important;
+            display: block !important;
             position: fixed !important;
             right: 0 !important;
             bottom: 6px !important;
             z-index: 2147483647 !important;
             width: 144px !important;
+            min-width: 0 !important;
+            max-width: 100vw !important;
             height: 56px !important;
             overflow: hidden !important;
             pointer-events: none !important;
@@ -49,14 +46,12 @@
             background: transparent !important;
         }
         @media print {
-            html.${themeClass},
-            html.${themeClass} [${counterAttribute}] {
-                filter: none !important;
-            }
             #${hostId} { display: none !important; }
         }
     `);
 
+    const surfaceStyle = document.createElement('style');
+    document.head.append(surfaceStyle);
     const host = document.createElement('div');
     host.id = hostId;
     const shadow = host.attachShadow({ mode: 'open' });
@@ -125,44 +120,95 @@
 
     let enabled = GM_getValue(preferenceKey, false) === true;
 
-    function updateSurfaceFilters() {
-        const surfaces = new WeakMap();
-        surfaces.set(document.documentElement, { colour: [255, 255, 255], inverted: true });
-        for (const element of document.body.querySelectorAll('*')) {
-            element.removeAttribute(counterAttribute);
-        }
-        document.body.removeAttribute(counterAttribute);
+    function parseColour(value) {
+        const channels = value.match(/^rgba?\(([^)]+)\)$/);
+        if (!channels) return null;
+        const values = channels[1].split(',').map(Number);
+        return { channels: values.slice(0, 3), alpha: values.length === 4 ? values[3] : 1 };
+    }
 
-        for (const element of [document.body, ...document.body.querySelectorAll('*')]) {
-            if (element === host || !(element instanceof HTMLElement)) continue;
-            const parent = surfaces.get(element.parentElement);
-            if (!parent) continue;
-            const media = /^(IMG|VIDEO|CANVAS|IFRAME)$/.test(element.tagName);
-            if (media) {
-                if (parent.inverted && element.tagName !== 'IFRAME') {
-                    element.setAttribute(counterAttribute, '');
+    function brightness(channels) {
+        return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    }
+
+    function mixColour(colour, target, weight) {
+        const channels = colour.channels.map((channel, index) =>
+            Math.round(channel * weight + target[index] * (1 - weight))
+        );
+        return `rgba(${channels.join(',')},${colour.alpha})`;
+    }
+
+    function updateSurfaceColours() {
+        const surfaces = new WeakSet();
+        const rules = [];
+        surfaceStyle.disabled = true;
+        try {
+            const elements = [document.documentElement, document.body, ...document.body.querySelectorAll('*')];
+            for (const [index, element] of elements.entries()) {
+                element.removeAttribute(surfaceAttribute);
+                if (element === host || !(element instanceof HTMLElement || element instanceof SVGElement)) continue;
+                if (element !== document.documentElement && !surfaces.has(element.parentElement)) continue;
+                if (/^(IMG|VIDEO|CANVAS|IFRAME|EMBED|OBJECT|PICTURE|SCRIPT|STYLE|LINK)$/.test(element.tagName)) continue;
+
+                const computed = getComputedStyle(element);
+                const background = parseColour(computed.backgroundColor);
+                surfaces.add(element);
+                const declarations = [];
+                if (background && background.alpha > 0 && brightness(background.channels) >= 128) {
+                    declarations.push(`background-color:${mixColour(background, [21, 23, 25], 0.15)} !important`);
+                } else if (element === document.documentElement && (!background || background.alpha === 0)) {
+                    declarations.push('background-color:rgb(21,23,25) !important');
                 }
-                continue;
-            }
 
-            const background = getComputedStyle(element).backgroundColor;
-            const channels = background.match(/^rgba?\(([^)]+)\)$/);
-            const values = channels ? channels[1].split(',').map(Number) : [];
-            const alpha = values.length === 4 ? values[3] : values.length === 3 ? 1 : 0;
-            const colour = parent.colour.map((channel, index) =>
-                alpha > 0 ? values[index] * alpha + channel * (1 - alpha) : channel
-            );
-            const brightness = colour[0] * 0.2126 + colour[1] * 0.7152 + colour[2] * 0.0722;
-            const inverted = brightness >= 128;
-            if (inverted !== parent.inverted) {
-                element.setAttribute(counterAttribute, '');
+                for (const property of ['color', 'fill', 'stroke']) {
+                    if (property !== 'color' && !(element instanceof SVGElement)) continue;
+                    const colour = parseColour(computed.getPropertyValue(property));
+                    if (colour && colour.alpha > 0 && brightness(colour.channels) < 128) {
+                        declarations.push(`${property}:${mixColour(colour, [241, 243, 245], 0.2)} !important`);
+                    }
+                }
+                for (const side of ['top', 'right', 'bottom', 'left']) {
+                    const property = `border-${side}-color`;
+                    const colour = parseColour(computed.getPropertyValue(property));
+                    if (colour && colour.alpha > 0 && brightness(colour.channels) >= 128) {
+                        declarations.push(`${property}:${mixColour(colour, [100, 105, 112], 0.2)} !important`);
+                    }
+                }
+                const selector = element === document.documentElement ? `html.${themeClass}` :
+                    `html.${themeClass} [${surfaceAttribute}="${index}"]`;
+                const pseudoElements = ['::before', '::after'];
+                if (/^(INPUT|TEXTAREA)$/.test(element.tagName)) pseudoElements.push('::placeholder');
+                let hasPseudoRules = false;
+                for (const pseudoElement of pseudoElements) {
+                    const pseudo = getComputedStyle(element, pseudoElement);
+                    if (pseudoElement !== '::placeholder' && (pseudo.content === 'none' || pseudo.content === 'normal')) continue;
+                    const pseudoDeclarations = [];
+                    const colour = parseColour(pseudo.color);
+                    if (colour && colour.alpha > 0 && brightness(colour.channels) < 128) {
+                        pseudoDeclarations.push(`color:${mixColour(colour, [241, 243, 245], 0.2)} !important`);
+                    }
+                    const pseudoBackground = parseColour(pseudo.backgroundColor);
+                    if (pseudoBackground && pseudoBackground.alpha > 0 && brightness(pseudoBackground.channels) >= 128) {
+                        pseudoDeclarations.push(`background-color:${mixColour(pseudoBackground, [21, 23, 25], 0.15)} !important`);
+                    }
+                    if (pseudoDeclarations.length) {
+                        hasPseudoRules = true;
+                        rules.push(`${selector}${pseudoElement}{${pseudoDeclarations.join(';')}}`);
+                    }
+                }
+                if (declarations.length || hasPseudoRules) {
+                    element.setAttribute(surfaceAttribute, String(index));
+                    if (declarations.length) rules.push(`${selector}{${declarations.join(';')}}`);
+                }
             }
-            surfaces.set(element, { colour, inverted });
+            surfaceStyle.textContent = `@media screen{${rules.join('\n')}}`;
+        } finally {
+            surfaceStyle.disabled = false;
         }
     }
 
     function render() {
-        if (enabled) updateSurfaceFilters();
+        if (enabled) updateSurfaceColours();
         document.documentElement.classList.toggle(themeClass, enabled);
         button.textContent = enabled ? 'Light mode' : 'Dark mode';
         button.setAttribute('aria-label', 'Toggle dark mode');
@@ -197,13 +243,14 @@
 
     let surfaceUpdatePending = false;
     const observer = new MutationObserver((mutations) => {
-        if (!mutations.some((mutation) => mutation.target !== host)) return;
+        if (!mutations.some((mutation) => mutation.target !== host &&
+            mutation.target !== surfaceStyle && !surfaceStyle.contains(mutation.target))) return;
         if (mutations.some((mutation) => mutation.type === 'childList')) updateTogglePosition();
         if (!enabled || surfaceUpdatePending) return;
         surfaceUpdatePending = true;
         requestAnimationFrame(() => {
             surfaceUpdatePending = false;
-            if (enabled) updateSurfaceFilters();
+            if (enabled) updateSurfaceColours();
         });
     });
     observer.observe(document.documentElement, {

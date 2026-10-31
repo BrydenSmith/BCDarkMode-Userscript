@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Universal Dark Mode Regression Tests</title>
+    <style>
+        body { margin: 0; background: rgb(43, 43, 59); }
+        body > div { min-width: 1272px; }
+        #login { position: fixed; inset: 0; background: white; color: black; padding: 24px; }
+        #existing-dark { background: rgb(30, 35, 40); color: white; }
+        #login label::after { content: '.example.com'; color: rgb(6, 6, 45); }
+        #login input::placeholder { color: rgb(69, 69, 161); }
+        iframe, embed, object { width: 160px; height: 100px; }
+        #results { position: fixed; bottom: 80px; left: 24px; max-width: 80vw; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <main id="login">
+        <h1>Login fixture</h1>
+        <label>Company <input type="text" placeholder="company"></label>
+        <button type="button">Continue</button>
+        <p id="existing-dark">Existing dark surface</p>
+        <iframe title="Embedded page" srcdoc="<p>Embedded page</p>"></iframe>
+        <embed type="application/pdf" aria-label="PDF embed">
+        <object type="application/pdf" aria-label="PDF object"><p>PDF fallback</p></object>
+    </main>
+    <pre id="results">Running...</pre>
+    <script>
+        let toggleDarkMode;
+        let savedPreference;
+        window.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 0);
+        window.GM_addStyle = (css) => {
+            const style = document.createElement('style');
+            style.textContent = css;
+            document.head.append(style);
+        };
+        window.GM_getValue = () => false;
+        window.GM_setValue = (_key, value) => { savedPreference = value; };
+        window.GM_addValueChangeListener = () => {};
+        window.GM_registerMenuCommand = (_label, callback) => { toggleDarkMode = callback; };
+    </script>
+    <script src="../UniversalDarkMode.user.js"></script>
+    <script>
+        const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+        const settle = async () => { await nextFrame(); await nextFrame(); await nextFrame(); };
+        const assert = (condition, message) => { if (!condition) throw new Error(message); };
+        const login = document.getElementById('login');
+        const original = {
+            rect: JSON.stringify(login.getBoundingClientRect().toJSON()),
+            background: getComputedStyle(login).backgroundColor,
+            colour: getComputedStyle(login).color,
+            width: document.documentElement.scrollWidth,
+        };
+        const runTests = async () => {
+            assert(document.body.offsetHeight === 0, 'Fixture must reproduce a zero-height body');
+            toggleDarkMode();
+            await settle();
+            assert(savedPreference === true, 'Enabled preference was not saved');
+            assert(JSON.stringify(login.getBoundingClientRect().toJSON()) === original.rect, 'Fixed panel moved');
+            assert(document.documentElement.scrollWidth === original.width, 'Page width changed');
+            assert(getComputedStyle(login).backgroundColor !== original.background, 'Light background did not darken');
+            assert(getComputedStyle(login).color !== original.colour, 'Dark text did not lighten');
+            assert(getComputedStyle(document.querySelector('label'), '::after').color !== 'rgb(6, 6, 45)', 'Generated text did not lighten');
+            assert(getComputedStyle(document.querySelector('input'), '::placeholder').color !== 'rgb(69, 69, 161)', 'Placeholder did not lighten');
+            assert(getComputedStyle(document.getElementById('existing-dark')).backgroundColor === 'rgb(30, 35, 40)', 'Existing dark surface changed');
+            assert(document.elementFromPoint(30, 30) === login, 'Fixed panel became obscured');
+            const host = document.getElementById('tm-universal-dark-mode-toggle');
+            assert(host.getBoundingClientRect().width === Math.min(144, innerWidth), 'Site CSS stretched the toggle');
+            for (const viewer of document.querySelectorAll('iframe, embed, object')) {
+                for (let ancestor = viewer; ancestor; ancestor = ancestor.parentElement) {
+                    assert(getComputedStyle(ancestor).filter === 'none', 'Viewer has a filtered ancestor');
+                }
+                assert(!viewer.hasAttribute('data-tm-universal-dark-mode-surface'), 'Viewer was recoloured');
+            }
+            assert(!document.querySelector('object p').hasAttribute('data-tm-universal-dark-mode-surface'), 'Viewer fallback was recoloured');
+            const dynamic = document.createElement('p');
+            dynamic.style.cssText = 'background-color:rgb(250,250,250);color:rgb(10,10,10)';
+            login.append(dynamic);
+            await settle();
+            assert(getComputedStyle(dynamic).backgroundColor !== 'rgb(250, 250, 250)', 'Dynamic surface was not themed');
+            dynamic.style.backgroundColor = 'rgb(220, 230, 240)';
+            await settle();
+            const rulesBefore = [...document.querySelectorAll('style')].map((style) => style.textContent).join('');
+            await settle();
+            const rulesAfter = [...document.querySelectorAll('style')].map((style) => style.textContent).join('');
+            assert(rulesBefore === rulesAfter, 'Repeated updates changed the colours');
+            toggleDarkMode();
+            await settle();
+            assert(savedPreference === false, 'Disabled preference was not saved');
+            assert(getComputedStyle(login).backgroundColor === original.background, 'Background was not restored');
+            assert(getComputedStyle(login).color === original.colour, 'Text was not restored');
+            assert(getComputedStyle(dynamic).backgroundColor === 'rgb(220, 230, 240)', 'Page changes were not preserved');
+            return 'Passed: fixed layout, viewport width, colours, media exclusions, dynamic updates, and restoration.';
+        };
+        window.testResult = runTests().then((message) => {
+            document.getElementById('results').textContent = message;
+            return { passed: true, message };
+        }).catch((error) => {
+            document.getElementById('results').textContent = `Failed: ${error.message}`;
+            return { passed: false, message: error.message };
+        });
+    </script>
+</body>
+</html>
