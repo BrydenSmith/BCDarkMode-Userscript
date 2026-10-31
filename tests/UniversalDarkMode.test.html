@@ -31,6 +31,7 @@
         let toggleDarkMode;
         let toggleImageBlending;
         let toggleMethod;
+        let toggleFixedRepair;
         let savedPreference;
         const preferences = new Map();
         const preferenceListeners = new Map();
@@ -55,6 +56,7 @@
         window.GM_registerMenuCommand = (label, callback) => {
             if (label === 'Toggle universal dark mode') toggleDarkMode = callback;
             else if (label.startsWith('Switch dark mode method')) toggleMethod = callback;
+            else if (label.startsWith('Toggle fixed-position repair')) toggleFixedRepair = callback;
             else toggleImageBlending = callback;
         };
     </script>
@@ -170,6 +172,52 @@
             assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Cross-tab method selection was not applied');
             toggleDarkMode();
             assert(getComputedStyle(document.documentElement).filter === 'none', 'Disabling filter mode did not restore original filter');
+            const repairContainer = document.createElement('section');
+            repairContainer.style.cssText = 'position:relative;width:240px;height:120px;background:white';
+            const floating = document.createElement('aside');
+            floating.style.cssText = 'position:fixed;top:12px;right:12px;width:80px;height:40px;background:white';
+            repairContainer.append(floating);
+            const transformed = document.createElement('section');
+            transformed.style.cssText = 'transform:translateX(5px);width:240px;height:120px;background:rgb(20,25,30)';
+            const intentional = floating.cloneNode();
+            transformed.append(intentional);
+            const spacer = document.createElement('section');
+            spacer.style.height = '2000px';
+            document.body.append(repairContainer, transformed, spacer);
+            const inlineStyle = floating.getAttribute('style');
+            const originalBounds = floating.getBoundingClientRect();
+            toggleDarkMode();
+            await settle();
+            const displaced = floating.getBoundingClientRect();
+            assert(Math.abs(displaced.left - originalBounds.left) > 5, 'Fixture did not reproduce filter displacement');
+            assert(!floating.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Repair must be opt-in');
+            toggleFixedRepair();
+            await settle();
+            const repaired = floating.getBoundingClientRect();
+            assert(Math.abs(repaired.left - originalBounds.left) < 1 && Math.abs(repaired.top - originalBounds.top) < 1, 'Fixed geometry was not repaired');
+            assert(getComputedStyle(document.documentElement).filter.includes('invert(1)'), 'Repair changed inversion method');
+            assert(!intentional.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Intentional transformed containment was modified');
+            assert(preferences.get(`universal-dark-mode-repair-fixed:${location.hostname}`) === true, 'Repair preference was not saved per site');
+            window.scrollTo(0, 300);
+            document.dispatchEvent(new Event('scroll'));
+            await settle();
+            const scrolled = floating.getBoundingClientRect();
+            assert(Math.abs(scrolled.top - originalBounds.top) < 1, 'Repair did not follow viewport scrolling');
+            toggleFixedRepair();
+            await settle();
+            assert(!floating.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Disabling repair left correction attributes');
+            assert(getComputedStyle(floating).translate === 'none', 'Disabling repair left a translation');
+            assert(floating.getAttribute('style') === inlineStyle, 'Repair modified original inline styles');
+            const repairKey = `universal-dark-mode-repair-fixed:${location.hostname}`;
+            preferenceListeners.get(repairKey)(repairKey, false, true);
+            assert(floating.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Cross-tab repair preference was not applied');
+            toggleMethod();
+            assert(!floating.hasAttribute('data-tm-universal-dark-mode-fixed-repair'), 'Colour mode retained positioning corrections');
+            toggleDarkMode();
+            window.scrollTo(0, 0);
+            repairContainer.remove();
+            transformed.remove();
+            spacer.remove();
             return 'Passed: fixed layout, viewport width, colours, media exclusions, dynamic updates, and restoration.';
         };
         window.testResult = runTests().then((message) => {
